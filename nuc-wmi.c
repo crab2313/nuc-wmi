@@ -1,8 +1,13 @@
 #include <linux/module.h>
 #include <linux/wmi.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
 
 
 #define NUC_WMI_GUID		"8C5DA44C-CDC3-46B3-8619-4E26D34390B7"
+
+#define NUC_ACPI_PROC_DIR "nuc"
+#define NUC_LED_ACPI_PROC_DIR "led"
 
 /* Intel NUC WMI interface method definition */
 #define NUC_METHODID_OLD_GET_LED                          0x1
@@ -39,11 +44,16 @@ const char *led_types[] = {
 };
 
 enum led_color {
-	NUC_LED_COLOR_TYPE_BLUE_AMBER = 0x0,
-	NUC_LED_COLOR_TYPE_BLUE_WHITE,
-	NUC_LED_COLOR_TYPE_RGB,
+	NUC_LED_COLOR_BLUE_AMBER = 0x0,
+	NUC_LED_COLOR_BLUE_WHITE,
+	NUC_LED_COLOR_RGB,
 };
 
+const char *led_colors[] = {
+	[NUC_LED_COLOR_BLUE_AMBER] = "blue/amber",
+	[NUC_LED_COLOR_BLUE_WHITE] = "blue/white",
+	[NUC_LED_COLOR_RGB] = "rgb",
+};
 
 enum led_indicator {
 	NUC_LED_INDICATOR_POWER_STATE = 0x0,
@@ -56,6 +66,16 @@ enum led_indicator {
 	NUC_LED_INDICATOR_DISABLE,
 };
 
+const char *led_indicators[] = {
+	[NUC_LED_INDICATOR_POWER_STATE] = "power_state",
+	[NUC_LED_INDICATOR_HDD] = "hdd",
+	[NUC_LED_INDICATOR_ETHERNET] = "ethernet",
+	[NUC_LED_INDICATOR_WIFI] = "wifi",
+	[NUC_LED_INDICATOR_SOFTWARE] = "software",
+	[NUC_LED_INDICATOR_POWER_LIMIT] = "power_limit",
+	[NUC_LED_INDICATOR_DISABLE] = "disable",
+};
+
 struct acpi_args {
 	u8 arg0;
 	u8 arg1;
@@ -63,15 +83,14 @@ struct acpi_args {
 	u8 arg3;
 } __packed;
 
-static int nuc_query_leds(const struct acpi_args *args, u32 *bitmap)
+static int nuc_wmi_query(u32 method, const struct acpi_args *args, u32 *output)
 {
 	struct acpi_buffer in = { sizeof(args), (void *)args};
 	struct acpi_buffer out = { ACPI_ALLOCATE_BUFFER, NULL };
 	union acpi_object *obj;
-	int ret = 0;
-	u32 res;
+	u32 res, ret = 0;
 
-	nuc_wmi_evalute_method(NUC_METHODID_QUERY_LED, &in, &out);
+	nuc_wmi_evalute_method(method, &in, &out);
 
 	obj = (union acpi_object *)out.pointer;
 
@@ -88,11 +107,11 @@ static int nuc_query_leds(const struct acpi_args *args, u32 *bitmap)
 	if (res & 0xf) {
 		pr_err("nuc query (%d, %d, %d) failed: %d\n", args->arg0,
 				args->arg1, args->arg2, res & 0xf);
-		ret = -EINVAL;
+		ret = -EIO;
 		goto out_free;
 	}
 
-	*bitmap = res >> 8;
+	*output = res >> 8;
 
 out_free:
 	kfree(obj);
@@ -102,40 +121,89 @@ out_free:
 static int nuc_query_supported_types(u32 *types)
 {
 	struct acpi_args args = { .arg0 = 0 };
-	return nuc_query_leds(&args, types);
+	return nuc_wmi_query(NUC_METHODID_QUERY_LED, &args, types);
 }
 
 static int nuc_query_supported_indicators(u8 type, u32 *indicators)
 {
 	struct acpi_args args = { .arg0 = 2, .arg1 = type };
-	return nuc_query_leds(&args, indicators);
+	return nuc_wmi_query(NUC_METHODID_QUERY_LED, &args, indicators);
 }
 
 static int nuc_query_supported_items(u8 type, u8 indicator, u32 *items)
 {
 	struct acpi_args args = { .arg0 = 3, .arg1 = type, .arg2 = indicator};
-	return nuc_query_leds(&args, items);
+	return nuc_wmi_query(NUC_METHODID_QUERY_LED, &args, items);
 }
 
 static int nuc_query_color_type(u8 type, enum led_color *color)
 {
-	u32 tmp = 0;
+	u32 out = 0, ret;
 	struct acpi_args args = { .arg0 = 1, .arg1 = type };
-	return nuc_query_leds(&args, &tmp);
-	*color = (enum led_color)tmp;
+	ret = nuc_wmi_query(NUC_METHODID_QUERY_LED, &args, &out);
+	*color = (enum led_color)(ffs(out)-1);
+	return ret;
+}
+
+static int nuc_query_led_indicator(u8 type, enum led_indicator *indicator)
+{
+	u32 out = 0, ret;
+	struct acpi_args args = { .arg0 = 0, .arg1 = type };
+	ret = nuc_wmi_query(NUC_METHODID_GET_LED, &args, &out);
+	*indicator = (enum led_indicator)out;
+	return ret;
 }
 
 struct nuc_led {
 	bool valid;
 	u8 type;
 	enum led_color color;
-	u8 indicator, indicator_item;
+	enum led_indicator indicator;
+	u8 indicator_item;
 	u8 allowed_indicator;
 	u32 allowed_indicator_item[8];
 };
 
 struct nuc_wmi {
 	struct nuc_led leds[NUC_LED_TYPE_MAX];
+};
+
+static struct proc_dir_entry *proc_dir;
+static struct proc_dir_entry *led_dir;
+
+static int nuc_led_proc_show(struct seq_file *m, void *v)
+{
+	int i;
+	struct nuc_led *led = (struct nuc_led *)m->private;
+
+	if (!m || !led)
+		return -EINVAL;
+	seq_printf(m, "type:\t\t%s\n", led_types[led->type]);
+	seq_printf(m, "color:\t\t%s\n", led_colors[led->color]);
+	seq_printf(m, "indicator:\t%s\n", led_indicators[led->indicator]);
+
+	seq_putc(m, '\n');
+
+	seq_printf(m, "allowed indicators:");
+	for (i = 0; i < NUC_LED_INDICATOR_DISABLE; i++)
+		if (led->allowed_indicator & (1 << i))
+			seq_printf(m, " %s", led_indicators[i]);
+	seq_putc(m, '\n');
+
+
+	return 0;
+}
+
+static int nuc_led_proc_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, nuc_led_proc_show, PDE_DATA(inode));
+}
+
+static const struct proc_ops led_proc_ops = {
+	.proc_open = nuc_led_proc_open,
+	.proc_read = seq_read,
+	.proc_lseek = seq_lseek,
+	.proc_release = single_release,
 };
 
 static int nuc_wmi_probe(struct wmi_device *wdev, const void *context)
@@ -178,6 +246,11 @@ static int nuc_wmi_probe(struct wmi_device *wdev, const void *context)
 		dev_info(&wdev->dev, "supported indicators: %x\n", indicators);
 		led->allowed_indicator = indicators;
 
+		if (nuc_query_led_indicator(i, &led->indicator) < 0)
+			return -EIO;
+
+		dev_info(&wdev->dev, "current indicator %s\n",
+				led_indicators[led->indicator]);
 
 		for (j = 0; j < NUC_LED_INDICATOR_DISABLE; j++) {
 			if (!(indicators & (1 << j)))
@@ -192,7 +265,38 @@ static int nuc_wmi_probe(struct wmi_device *wdev, const void *context)
 		}
 	}
 
+	proc_dir = proc_mkdir(NUC_ACPI_PROC_DIR, acpi_root_dir);
+	if (!proc_dir) {
+		pr_err("unable to create proc dir " NUC_ACPI_PROC_DIR "\n");
+		return -ENODEV;
+	}
+
+	led_dir = proc_mkdir(NUC_LED_ACPI_PROC_DIR, proc_dir);
+
+	if (!led_dir) {
+		pr_err("unable to create proc led dir" NUC_LED_ACPI_PROC_DIR "\n");
+		return -ENODEV;
+	}
+
+	for (i = 0; i < NUC_LED_TYPE_MAX; i++) {
+		if (!data->leds[i].valid)
+			continue;
+		if (!proc_create_data(led_types[i], S_IRUGO | S_IWUSR, led_dir,
+			&led_proc_ops, &data->leds[i])) {
+                        return -ENODEV;
+		}
+	}
+
 	return 0;
+}
+
+static int nuc_wmi_remove(struct wmi_device *wdev)
+{
+	if (led_dir)
+		proc_remove(led_dir);
+	if (proc_dir)
+		proc_remove(proc_dir);
+        return 0;
 }
 
 static struct wmi_device_id nuc_wmi_id_table[] = {
@@ -208,6 +312,7 @@ static struct wmi_driver nuc_wmi = {
 	},
 	.id_table = nuc_wmi_id_table,
 	.probe = nuc_wmi_probe,
+	.remove = nuc_wmi_remove,
 };
 module_wmi_driver(nuc_wmi);
 
