@@ -261,6 +261,38 @@ static void brightness_formatter(struct seq_file *m, struct nuc_led *led,
 	seq_printf(m, "brightness %d%%", brightness * 100 / 0x64);
 }
 
+static void blinking_formatter(struct seq_file *m, struct nuc_led *led,
+	u8 indicator, u8 base)
+{
+	u8 behavior, freq;
+	const char *blink[] = {
+		"solid", "breathing", "pulsing", "strobing",
+	};
+
+	nuc_query_indicator_item(led->type, indicator, base, &behavior);
+	nuc_query_indicator_item(led->type, indicator, base + 1, &freq);
+	seq_printf(m, "%s %d/12Hz",
+		behavior < ARRAY_SIZE(blink) ? blink[behavior] : "unknown",
+		freq);
+}
+
+static void brightness_color_formatter(struct seq_file *m, struct nuc_led *led,
+	u8 indicator, u8 base)
+{
+	brightness_formatter(m, led, indicator, base);
+	seq_putc(m, ' ');
+	color_formatter(m, led, indicator, base + 1);
+}
+
+static void brightness_blinking_color_formatter(struct seq_file *m,
+	struct nuc_led *led, u8 indicator, u8 base)
+{
+	brightness_formatter(m, led, indicator, base);
+	seq_putc(m, ' ');
+	blinking_formatter(m, led, indicator, base + 1);
+	seq_putc(m, ' ');
+	color_formatter(m, led, indicator, base + 3);
+}
 
 static void power_state_formatter(struct seq_file *m, struct nuc_led *led)
 {
@@ -302,21 +334,64 @@ static void hdd_formatter(struct seq_file *m, struct nuc_led *led)
 	color_formatter(m, led, NUC_LED_INDICATOR_HDD, HDD_COLOR);
 }
 
+static void ethernet_formatter(struct seq_file *m, struct nuc_led *led)
+{
+	u8 type;
+
+	nuc_query_indicator_item(led->type, NUC_LED_INDICATOR_ETHERNET,
+		ETHERNET_TYPE, &type);
+	seq_printf(m, "%s ", type == 0 ? "LAN1" :
+			type == 1 ? "LAN2" :
+			type == 2 ? "LAN1+LAN2" : "UNKNOWN");
+	brightness_color_formatter(m, led, NUC_LED_INDICATOR_ETHERNET,
+		ETHERNET_BRIGHTNESS);
+}
+
+static void wifi_formatter(struct seq_file *m, struct nuc_led *led)
+{
+	brightness_color_formatter(m, led, NUC_LED_INDICATOR_WIFI,
+		WIFI_BRIGHTNESS);
+}
+
+static void software_formatter(struct seq_file *m, struct nuc_led *led)
+{
+	brightness_blinking_color_formatter(m, led, NUC_LED_INDICATOR_SOFTWARE,
+		SOFTWARE_BRIGHTNESS);
+}
+
+static void power_limit_formatter(struct seq_file *m, struct nuc_led *led)
+{
+	u8 scheme;
+
+	nuc_query_indicator_item(led->type, NUC_LED_INDICATOR_POWER_LIMIT,
+		PL_SCHEME, &scheme);
+
+	switch (scheme) {
+		case 0:
+			seq_printf(m, "green-to-red ");
+			brightness_color_formatter(m, led,
+				NUC_LED_INDICATOR_POWER_LIMIT, PL_BRIGHTNESS);
+			break;
+		case 1:
+			seq_printf(m, "single-color ");
+			color_formatter(m, led,
+				NUC_LED_INDICATOR_POWER_LIMIT, PL_COLOR);
+			break;
+		default:
+			seq_printf(m, "unknown power limit scheme");
+	}
+}
+
 typedef void (*item_format_func)(struct seq_file *, struct nuc_led *);
 
 static item_format_func item_formatter[] = {
 	[NUC_LED_INDICATOR_POWER_STATE] = power_state_formatter,
 	[NUC_LED_INDICATOR_HDD] = hdd_formatter,
-#if 0
-	[NUC_LED_INDICATOR_ETHERNET] = "ethernet",
-	[NUC_LED_INDICATOR_WIFI] = "wifi",
-	[NUC_LED_INDICATOR_SOFTWARE] = "software",
-	[NUC_LED_INDICATOR_POWER_LIMIT] = "power_limit",
-	[NUC_LED_INDICATOR_DISABLE] = "disable",
-#endif
+	[NUC_LED_INDICATOR_ETHERNET] = ethernet_formatter,
+	[NUC_LED_INDICATOR_WIFI] = wifi_formatter,
+	[NUC_LED_INDICATOR_SOFTWARE] = software_formatter,
+	[NUC_LED_INDICATOR_POWER_LIMIT] = power_limit_formatter,
 };
-
-
 
 static int nuc_led_proc_show(struct seq_file *m, void *v)
 {
