@@ -296,32 +296,17 @@ static void brightness_blinking_color_formatter(struct seq_file *m,
 
 static void power_state_formatter(struct seq_file *m, struct nuc_led *led)
 {
-	const char *blink[] = {
-		"solid", "breathing", "pulsing", "strobing",
-	};
-
 #define PRINT_STATE(state) \
 	do {			\
-		u8 value;	\
-		seq_printf(m, "%s:", #state);				\
-		nuc_query_indicator_item(led->type, 			\
+		seq_printf(m, "%s:\t", #state);				\
+		brightness_blinking_color_formatter(m, led,  		\
 			NUC_LED_INDICATOR_POWER_STATE, 			\
-			PS_##state##_BRIGHTNESS, &value);		\
-		seq_printf(m, " brightness %d%%,", value * 100 / 0x64); \
-		nuc_query_indicator_item(led->type, 			\
-			NUC_LED_INDICATOR_POWER_STATE, 			\
-			PS_##state##_BLINKING_BEHAVIOR, &value);	\
-		seq_printf(m, " %s", blink[value]);			\
-		nuc_query_indicator_item(led->type, 			\
-			NUC_LED_INDICATOR_POWER_STATE, 			\
-			PS_##state##_BLINKING_FREQUENCY, &value);	\
-		seq_printf(m, " %d/12Hz,", value);			\
-		seq_putc(m, '\n');					\
+			PS_##state##_BRIGHTNESS);			\
 	} while(0);
 
-	PRINT_STATE(S0);
-	PRINT_STATE(S3);
-	PRINT_STATE(READY);
+	PRINT_STATE(S0); 	seq_putc(m, '\n');
+	PRINT_STATE(S3);	seq_putc(m, '\n');
+	PRINT_STATE(READY);	seq_putc(m, '\n');
 	PRINT_STATE(S5);
 
 #undef PRINT_STATE
