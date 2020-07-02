@@ -234,6 +234,34 @@ struct nuc_wmi {
 static struct proc_dir_entry *proc_dir;
 static struct proc_dir_entry *led_dir;
 
+static void color_formatter(struct seq_file *m, struct nuc_led *led,
+	u8 indicator, u8 base)
+{
+	u8 c1, c2, c3;
+
+	nuc_query_indicator_item(led->type, indicator, base, &c1);
+
+	if (led->color == NUC_LED_COLOR_RGB) {
+		nuc_query_indicator_item(led->type, indicator, base+1, &c2);
+		nuc_query_indicator_item(led->type, indicator, base+2, &c3);
+		seq_printf(m, "rgb(%d,%d,%d)", c1, c2, c3);
+	} else {
+		seq_printf(m, "%s", !c1 ? "blue" :
+			led->color == NUC_LED_COLOR_BLUE_AMBER ?
+			"amber" : "white");
+	}
+}
+
+static void brightness_formatter(struct seq_file *m, struct nuc_led *led,
+	u8 indicator, u8 base)
+{
+	u8 brightness;
+
+	nuc_query_indicator_item(led->type, indicator, base, &brightness);
+	seq_printf(m, "brightness %d%%", brightness * 100 / 0x64);
+}
+
+
 static void power_state_formatter(struct seq_file *m, struct nuc_led *led)
 {
 	const char *blink[] = {
@@ -267,12 +295,19 @@ static void power_state_formatter(struct seq_file *m, struct nuc_led *led)
 #undef PRINT_STATE
 }
 
+static void hdd_formatter(struct seq_file *m, struct nuc_led *led)
+{
+	brightness_formatter(m, led, NUC_LED_INDICATOR_HDD, HDD_BRIGHTNESS);
+	seq_putc(m, ' ');
+	color_formatter(m, led, NUC_LED_INDICATOR_HDD, HDD_COLOR);
+}
+
 typedef void (*item_format_func)(struct seq_file *, struct nuc_led *);
 
 static item_format_func item_formatter[] = {
 	[NUC_LED_INDICATOR_POWER_STATE] = power_state_formatter,
+	[NUC_LED_INDICATOR_HDD] = hdd_formatter,
 #if 0
-	[NUC_LED_INDICATOR_HDD] = "hdd",
 	[NUC_LED_INDICATOR_ETHERNET] = "ethernet",
 	[NUC_LED_INDICATOR_WIFI] = "wifi",
 	[NUC_LED_INDICATOR_SOFTWARE] = "software",
