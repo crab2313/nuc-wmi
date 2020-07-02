@@ -76,6 +76,55 @@ const char *led_indicators[] = {
 	[NUC_LED_INDICATOR_DISABLE] = "disable",
 };
 
+#define SINGLE_OR_RGB(prefix) \
+	prefix##_COLOR, \
+	prefix##_R = prefix##_COLOR, \
+	prefix##_G, \
+	prefix##_B
+
+#define POWER_STATE_ITEMS(state) \
+	state##_BRIGHTNESS, \
+	state##_BLINKING_BEHAVIOR, \
+	state##_BLINKING_FREQUENCY, \
+	SINGLE_OR_RGB(state)
+
+enum power_state_item {
+	POWER_STATE_ITEMS(PS_S0),
+	POWER_STATE_ITEMS(PS_S3),
+	POWER_STATE_ITEMS(PS_READY),
+	POWER_STATE_ITEMS(PS_S5),
+};
+
+enum hdd_item {
+	HDD_BRIGHTNESS,
+	SINGLE_OR_RGB(HDD),
+	HDD_BEHAVIOR,
+};
+
+enum ethernet_item {
+	ETHERNET_TYPE,
+	ETHERNET_BRIGHTNESS,
+	SINGLE_OR_RGB(ETHERNET),
+};
+
+enum wifi_item {
+	WIFI_BRIGHTNESS,
+	SINGLE_OR_RGB(WIFI),
+};
+
+enum software_item {
+	SOFTWARE_BRIGHTNESS,
+	SOFTWARE_BLINKING_BEHAVIOR,
+	SOFTWARE_BLINKING_FREQUENCY,
+	SINGLE_OR_RGB(SOFTWARE),
+};
+
+enum power_limit_item {
+	PL_SCHEME,
+	PL_BRIGHTNESS,
+	SINGLE_OR_RGB(PL),
+};
+
 struct acpi_args {
 	u8 arg0;
 	u8 arg1;
@@ -154,12 +203,26 @@ static int nuc_query_led_indicator(u8 type, enum led_indicator *indicator)
 	return ret;
 }
 
+static int nuc_query_indicator_item(u8 type, enum led_indicator indicator,
+		u8 item, u8 *value)
+{
+	u32 out = 0, ret;
+	struct acpi_args args = {
+		.arg0 = 1,
+		.arg1 = type,
+		.arg2 = (u8)indicator,
+		.arg3 = (u8)item
+	};
+	ret = nuc_wmi_query(NUC_METHODID_GET_LED, &args, &out);
+	*value = (u8)out;
+	return ret;
+}
+
 struct nuc_led {
 	bool valid;
 	u8 type;
 	enum led_color color;
 	enum led_indicator indicator;
-	u8 indicator_item;
 	u8 allowed_indicator;
 	u32 allowed_indicator_item[8];
 };
@@ -170,6 +233,55 @@ struct nuc_wmi {
 
 static struct proc_dir_entry *proc_dir;
 static struct proc_dir_entry *led_dir;
+
+static void power_state_formatter(struct seq_file *m, struct nuc_led *led)
+{
+	const char *blink[] = {
+		"solid", "breathing", "pulsing", "strobing",
+	};
+
+#define PRINT_STATE(state) \
+	do {			\
+		u8 value;	\
+		seq_printf(m, "%s:", #state);				\
+		nuc_query_indicator_item(led->type, 			\
+			NUC_LED_INDICATOR_POWER_STATE, 			\
+			PS_##state##_BRIGHTNESS, &value);		\
+		seq_printf(m, " brightness %d%%,", value * 100 / 0x64); \
+		nuc_query_indicator_item(led->type, 			\
+			NUC_LED_INDICATOR_POWER_STATE, 			\
+			PS_##state##_BLINKING_BEHAVIOR, &value);	\
+		seq_printf(m, " %s", blink[value]);			\
+		nuc_query_indicator_item(led->type, 			\
+			NUC_LED_INDICATOR_POWER_STATE, 			\
+			PS_##state##_BLINKING_FREQUENCY, &value);	\
+		seq_printf(m, " %d/12Hz,", value);			\
+		seq_putc(m, '\n');					\
+	} while(0);
+
+	PRINT_STATE(S0);
+	PRINT_STATE(S3);
+	PRINT_STATE(READY);
+	PRINT_STATE(S5);
+
+#undef PRINT_STATE
+}
+
+typedef void (*item_format_func)(struct seq_file *, struct nuc_led *);
+
+static item_format_func item_formatter[] = {
+	[NUC_LED_INDICATOR_POWER_STATE] = power_state_formatter,
+#if 0
+	[NUC_LED_INDICATOR_HDD] = "hdd",
+	[NUC_LED_INDICATOR_ETHERNET] = "ethernet",
+	[NUC_LED_INDICATOR_WIFI] = "wifi",
+	[NUC_LED_INDICATOR_SOFTWARE] = "software",
+	[NUC_LED_INDICATOR_POWER_LIMIT] = "power_limit",
+	[NUC_LED_INDICATOR_DISABLE] = "disable",
+#endif
+};
+
+
 
 static int nuc_led_proc_show(struct seq_file *m, void *v)
 {
@@ -182,6 +294,10 @@ static int nuc_led_proc_show(struct seq_file *m, void *v)
 	seq_printf(m, "color:\t\t%s\n", led_colors[led->color]);
 	seq_printf(m, "indicator:\t%s\n", led_indicators[led->indicator]);
 
+	if (led->indicator < ARRAY_SIZE(item_formatter)
+		&& item_formatter[led->indicator])
+		item_formatter[led->indicator](m, led);
+
 	seq_putc(m, '\n');
 
 	seq_printf(m, "allowed indicators:");
@@ -189,7 +305,6 @@ static int nuc_led_proc_show(struct seq_file *m, void *v)
 		if (led->allowed_indicator & (1 << i))
 			seq_printf(m, " %s", led_indicators[i]);
 	seq_putc(m, '\n');
-
 
 	return 0;
 }
