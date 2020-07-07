@@ -385,20 +385,20 @@ static int nuc_led_proc_show(struct seq_file *m, void *v)
 
 	if (!m || !led)
 		return -EINVAL;
-	seq_printf(m, "type:\t\t%s\n", led_types[led->type]);
-	seq_printf(m, "color:\t\t%s\n", led_colors[led->color]);
-	seq_printf(m, "indicator:\t%s\n", led_indicators[led->indicator]);
+	seq_printf(m, "type:\t\t%s (%s)\n", led_types[led->type],
+		led_colors[led->color]);
 
+	seq_printf(m, "indicator:\t");
+	for (i = 0; i < NUC_LED_INDICATOR_DISABLE; i++)
+		if (led->allowed_indicator & (1 << i))
+			seq_printf(m, led->indicator == i ? "[%s] " : "%s ",
+				led_indicators[i]);
+	seq_putc(m, '\n');
+
+	seq_printf(m, "\ncontrol items:\n");
 	if (led->indicator < ARRAY_SIZE(item_formatter)
 		&& item_formatter[led->indicator])
 		item_formatter[led->indicator](m, led);
-
-	seq_putc(m, '\n');
-
-	seq_printf(m, "allowed indicators:");
-	for (i = 0; i < NUC_LED_INDICATOR_DISABLE; i++)
-		if (led->allowed_indicator & (1 << i))
-			seq_printf(m, " %s", led_indicators[i]);
 	seq_putc(m, '\n');
 
 	return 0;
